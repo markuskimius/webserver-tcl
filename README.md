@@ -3,7 +3,10 @@ A simple webserver based on Tcl.
 
 This package uses [getopt-tcl]. Modify the `auto_path` in [webserver] to refer to its path. By default, it is assumed to be `lib/getopt-tcl` - A symlink comes with this package that points to `../src/getopt-tcl/lib`.
 
-The files are served from `$HOME/public_html`.
+## Options
+
+* `--port <num>` Run on this port. Default is 5000.
+* `--basepath <path>` Serve pages from this path. Default is `$HOME/public_html`.
 
 ## License
 
