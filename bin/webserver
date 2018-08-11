@@ -63,10 +63,10 @@ proc on_connect { chan addr port } {
     set req(remote|port) $port
 
     # Enable line buffering
-    fconfigure $chan -translation auto -buffering line
+    fconfigure $chan -translation binary -buffering line
 
     # Get the request line
-    lassign [gets $chan] req(method) req(url) req(http)
+    lassign [string trim [gets $chan]] req(method) req(url) req(http)
 
     # HTTP check
     if { [lindex [split $req(http) "/"] 0] ne "HTTP" } {
@@ -88,7 +88,7 @@ proc on_connect { chan addr port } {
 
     # Get the remaining header
     while { 1 } {
-        set line [split [gets $chan] ":"]
+        set line [split [string trim [gets $chan]] ":"]
         if { $line eq "" } break
 
         set name [string tolower [lindex $line 0]]
@@ -134,9 +134,7 @@ proc on_post_request { request } {
     set contentType $req(header|content-type)
 
     # Read the request body
-    fconfigure $chan -translation binary -buffering none
     set rxbody [read $chan $length]
-    fconfigure $chan -translation auto -buffering line
 
     # Read the character set
     lassign [split $contentType ";="] ct1 ct2 ct3
@@ -244,16 +242,14 @@ proc send_data { args } {
     set status_text $status_code($status)
 
     # Send header
-    puts $chan "HTTP/1.0 $status $status_text"
+    puts $chan "HTTP/1.0 $status $status_text\r"
     foreach { name value } $header {
-        puts $chan "$name: $value"
+        puts $chan "$name: $value\r"
     }
 
     # Send body
-    puts $chan ""
-    fconfigure $chan -translation binary -buffering none
-    puts $chan $body
-    fconfigure $chan -translation auto -buffering line
+    puts $chan "\r"
+    puts -nonewline $chan $body
 }
 
 
@@ -431,6 +427,7 @@ set mime_type(.ttf)     "font/ttf"
 set mime_type(.txt)     "text/plain"
 set mime_type(.vsd)     "application/vnd.visio"
 set mime_type(.wav)     "audio/wav"
+set mime_type(.wasm)    "application/wasm"
 set mime_type(.weba)    "audio/webm"
 set mime_type(.webm)    "video/webm"
 set mime_type(.webp)    "image/webp"
