@@ -1,7 +1,7 @@
 # webserver-tcl
 A simple webserver based on Tcl.
 
-This package uses [getopt-tcl]. Modify the `auto_path` in [webserver] to refer to its path.
+This package uses [getopt-tcl]. Modify the `auto_path` in [webserver] to refer to its path. By default, it is assumed to be `lib/getopt-tcl` - A symlink comes with this package that points to `../src/getopt-tcl/lib`.
 
 ## License
 
