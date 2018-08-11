@@ -1,0 +1,455 @@
+#!/bin/sh
+#\
+exec tclsh "$0" "$@"
+
+# Change this path to where you have getopt-tcl installed
+lappend auto_path "../lib/getopt-tcl"
+
+package require getopt
+
+
+###########################################################################
+# DEFAULTS
+
+set opts(debug)     0
+set opts(port)      5000
+set opts(basepath)  "$env(HOME)/public_html"
+
+set pages(200)  "index.html"
+set pages(403)  "forbidden.html"
+set pages(404)  "missing.html"
+
+
+###########################################################################
+# PROGRAM BEGINS HERE
+
+proc main { argv } {
+    global opts
+    set errcount 0
+
+    while { 1 } {
+        set c [getopt $argv "debug 0 port is_port basepath is_dir"]
+        if { $c == -1 } break
+
+        switch -exact -- $c {
+            debug    { set opts(debug) 1          }
+            port     { set opts(port) $optarg     }
+            basepath { set opts(basepath) $optarg }
+
+            - {
+                puts stderr "invalid argument -- $optarg"
+                incr errcount
+            }
+
+            default { incr errcount }
+        }
+    }
+
+    # Sanity check
+    if { $errcount } {
+        exit 1
+    }
+
+    socket -server on_connect $opts(port)
+    puts "Listening on $opts(port)..."
+    vwait forever
+}
+
+
+proc on_connect { chan addr port } {
+    global opts
+    set req(channel) $chan
+    set req(remote|addr) $addr
+    set req(remote|port) $port
+
+    # Enable line buffering
+    fconfigure $chan -translation auto -buffering line
+
+    # Get the request line
+    lassign [gets $chan] req(method) req(url) req(http)
+
+    # HTTP check
+    if { [lindex [split $req(http) "/"] 0] ne "HTTP" } {
+        puts "$addr:$port - Received non-HTTP request, closing"
+        close $chan
+        return
+    }
+
+    # Log this connection
+    puts "$addr:$port - $req(method) $req(url) $req(http)"
+
+    # Parse the URL
+    lassign [split $req(url) "?"] req(path) req(query)
+    foreach param [split $req(query) "&"] {
+        lassign [split $param "="] name value
+
+        set req(query|$name) [url_decode $value]
+    }
+
+    # Get the remaining header
+    while { 1 } {
+        set line [split [gets $chan] ":"]
+        if { $line eq "" } break
+
+        set name [string tolower [lindex $line 0]]
+        set value [string trim [join [lrange $line 1 end] ":"]]
+        set req(header|$name) $value
+    }
+
+    # Show what we got
+    if { $opts(debug) } {
+        set display_order [list channel method http url path "query*" "remote*" "header*"]
+
+        foreach pattern $display_order {
+            foreach name [lsort -dictionary [array names req $pattern]] {
+                puts "  $name: $req($name)"
+            }
+        }
+    }
+
+    # Call the method handler
+    switch -exact -- $req(method) {
+        GET     { on_get_request req    }
+        POST    { on_post_request req   }
+        default { send_response req 405 }
+    }
+
+    close $chan
+}
+
+
+proc on_get_request { request } {
+    upvar $request req
+    set chan $req(channel)
+    set path $req(path)
+
+    send_file req $path
+}
+
+
+proc on_post_request { request } {
+    upvar $request req
+    set chan $req(channel)
+    set length $req(header|content-length)
+    set contentType $req(header|content-type)
+
+    # Read the request body
+    fconfigure $chan -translation binary -buffering none
+    set rxbody [read $chan $length]
+    fconfigure $chan -translation auto -buffering line
+
+    # Read the character set
+    lassign [split $contentType ";="] ct1 ct2 ct3
+    if { [string trim $ct2] eq "charset" } {
+        set charset [string tolower $ct3];
+    }
+
+    # Convert from the character set
+    if { [info exists charset] } {
+        catch {set rxbody [encoding convertfrom $charset $rxbody]} errmsg
+    }
+
+    # Convert escape sequences
+    set rxbody [subst -nocommands -novariables $rxbody]
+
+    # TODO - Do something interesting here
+    puts $rxbody
+
+    # Convert to the expected character set
+    if { [info exists charset] } {
+        catch {set rxbody [encoding convertto $charset $rxbody]} errmsg
+    }
+
+    # Send back the data
+    send_data req --status=201 --header [list "Content-Type" $contentType] -- $rxbody
+}
+
+
+proc send_response { request status } {
+    global pages
+    upvar $request req
+
+    if { [info exists pages($status)] } {
+        set file $pages($status)
+        send_file req $file
+    } else {
+        set text $::status_code($status)
+        send_data req --status=$status -- "$status $text"
+    }
+}
+
+
+proc send_file { request file } {
+    global opts
+    global pages
+    global mime_type
+    upvar $request req
+    set fullpath [file join $opts(basepath) [safe_path $file]]
+    set contentType "text/plain"
+
+    # URL to directory loads index.html
+    if { [file isdirectory $fullpath] } {
+        set fullpath [file join $opts(basepath) $pages(200)]
+    }
+
+    # Load the file - if we can
+    if { [catch { set body [slurp_file $fullpath] } errmsg] } {
+        if { $file ne $pages(404) } {
+            send_response req 404
+        } else {
+            send_data req --status=404 "404 Not Found"
+        }
+
+        return
+    }
+
+    # Determine content-type
+    set ext [file extension $fullpath]
+    if { [info exists mime_type($ext)] } {
+        set contentType $mime_type($ext)
+    }
+
+    # Send the data
+    send_data req --header=[list "Content-Type" $contentType] -- $body
+}
+
+
+proc send_data { args } {
+    global status_code
+    set status 200
+    set header [list "Content-Type" "text/plain"]
+
+    while { 1 } {
+        set c [getopt $args "status 1 header 1"]
+        if { $c == -1 } break
+
+        switch -exact -- $c {
+            status { set status $optarg }
+            header { set header $optarg }
+
+            - {
+                if { ! [info exists request] } {
+                    set request $optarg
+                } elseif { ! [info exists body] } {
+                    set body $optarg
+                } else {
+                    return -code error "Too many arguments -- $optarg"
+                }
+            }
+        }
+    }
+
+    upvar $request req
+    set chan $req(channel)
+    set status_text $status_code($status)
+
+    # Send header
+    puts $chan "HTTP/1.0 $status $status_text"
+    foreach { name value } $header {
+        puts $chan "$name: $value"
+    }
+
+    # Send body
+    puts $chan ""
+    fconfigure $chan -translation binary -buffering none
+    puts $chan $body
+    fconfigure $chan -translation auto -buffering line
+}
+
+
+###########################################################################
+# UTILITY FUNCTIONS
+
+proc safe_path { path } {
+    set safe [list]
+
+    foreach dir [split $path "/"] {
+        # Strip leading periods
+        regsub {^[.]*} $dir "" dir
+
+        if { $dir ne "" } {
+            lappend safe $dir
+        }
+    }
+
+    return [join $safe "/"]
+}
+
+
+proc slurp_file { file } {
+    set ifs [open $file rb]
+    set data [read $ifs]
+
+    close $ifs
+
+    return $data
+}
+
+
+# From http://wiki.tcl.tk/14144
+proc url_encode { string } {
+    variable map
+    variable alphanumeric
+
+    # The spec says: "non-alphanumeric characters are replaced by '%HH'"
+    # 1 leave alphanumerics characters alone
+    # 2 Convert every other character to an array lookup
+    # 3 Escape constructs that are "special" to the tcl parser
+    # 4 "subst" the result, doing all the array substitutions
+
+    regsub -all \[^$alphanumeric\] $string {$map(&)} string
+    # This quotes cases like $map([) or $map($) => $map(\[) ...
+    regsub -all {[][{})\\]\)} $string {\\&} string
+    return [subst -nocommand $string]
+}
+
+
+# From http://wiki.tcl.tk/14144
+proc url_decode { str } {
+    # rewrite "+" back to space
+    # protect \ from quoting another '\'
+    set str [string map [list + { } "\\" "\\\\"] $str]
+
+    # prepare to process all %-escapes
+    regsub -all -- {%([A-Fa-f0-9][A-Fa-f0-9])} $str {\\u00\1} str
+
+    # process \u unicode mapped chars
+    return [subst -novar -nocommand $str]
+}
+
+
+###########################################################################
+# VALIDATION FUNCTIONS
+
+proc is_port { val } {
+    return [expr [string is integer $val] && $val > 0 && $val <= 65535]
+}
+
+
+proc is_dir { path } {
+    return [file isdirectory $path]
+}
+
+
+###########################################################################
+# CONSTANTS
+
+set status_code(100)    "Continue"
+set status_code(101)    "Switching Protocols"
+set status_code(200)    "OK"
+set status_code(201)    "Created"
+set status_code(202)    "Accepted"
+set status_code(203)    "Non-Authoritative Information"
+set status_code(204)    "No Content"
+set status_code(205)    "Reset Content"
+set status_code(206)    "Partial Content"
+set status_code(300)    "Multiple Choices"
+set status_code(301)    "Moved Permanently"
+set status_code(302)    "Found"
+set status_code(303)    "See Other"
+set status_code(304)    "Not Modified"
+set status_code(305)    "Use Proxy"
+set status_code(306)    "(Unused)"
+set status_code(307)    "Temporary Redirect"
+set status_code(400)    "Bad Request"
+set status_code(401)    "Unauthorized"
+set status_code(402)    "Payment Required"
+set status_code(403)    "Forbidden"
+set status_code(404)    "Not Found"
+set status_code(405)    "Method Not Allowed"
+set status_code(406)    "Not Acceptable"
+set status_code(407)    "Proxy Authentication Required"
+set status_code(408)    "Request Timeout"
+set status_code(409)    "Conflict"
+set status_code(410)    "Gone"
+set status_code(411)    "Length Required"
+set status_code(412)    "Precondition Failed"
+set status_code(413)    "Request Entity Too Large"
+set status_code(414)    "Request-URI Too Long"
+set status_code(415)    "Unsupported Media Type"
+set status_code(416)    "Requested Range Not Satisfiable"
+set status_code(417)    "Expectation Failed"
+set status_code(500)    "Internal Server Error"
+set status_code(501)    "Not Implemented"
+set status_code(502)    "Bad Gateway"
+set status_code(503)    "Service Unavailable"
+set status_code(504)    "Gateway Timeout"
+set status_code(505)    "HTTP Version Not Supported"
+
+set mime_type(.aac)     "audio/aac"
+set mime_type(.abw)     "application/x-abiword"
+set mime_type(.arc)     "application/octet-stream"
+set mime_type(.avi)     "video/x-msvideo"
+set mime_type(.azw)     "application/vnd.amazon.ebook"
+set mime_type(.bin)     "application/octet-stream"
+set mime_type(.bmp)     "image/bmp"
+set mime_type(.bz)      "application/x-bzip"
+set mime_type(.bz2)     "application/x-bzip2"
+set mime_type(.csh)     "application/x-csh"
+set mime_type(.css)     "text/css"
+set mime_type(.csv)     "text/csv"
+set mime_type(.doc)     "application/msword"
+set mime_type(.docx)    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+set mime_type(.eot)     "application/vnd.ms-fontobject"
+set mime_type(.epub)    "application/epub+zip"
+set mime_type(.es)      "application/ecmascript"
+set mime_type(.gif)     "image/gif"
+set mime_type(.htm)     "text/html"
+set mime_type(.html)    "text/html"
+set mime_type(.ico)     "image/x-icon"
+set mime_type(.ics)     "text/calendar"
+set mime_type(.jar)     "application/java-archive"
+set mime_type(.jpeg)    "image/jpeg"
+set mime_type(.jpg)     "image/jpeg"
+set mime_type(.js)      "application/javascript"
+set mime_type(.json)    "application/json"
+set mime_type(.mid)     "audio/x-midi"
+set mime_type(.midi)    "audio/x-midi"
+set mime_type(.mpeg)    "video/mpeg"
+set mime_type(.mpkg)    "application/vnd.apple.installer+xml"
+set mime_type(.odp)     "application/vnd.oasis.opendocument.presentation"
+set mime_type(.ods)     "application/vnd.oasis.opendocument.spreadsheet"
+set mime_type(.odt)     "application/vnd.oasis.opendocument.text"
+set mime_type(.oga)     "audio/ogg"
+set mime_type(.ogv)     "video/ogg"
+set mime_type(.ogx)     "application/ogg"
+set mime_type(.otf)     "font/otf"
+set mime_type(.png)     "image/png"
+set mime_type(.pdf)     "application/pdf"
+set mime_type(.ppt)     "application/vnd.ms-powerpoint"
+set mime_type(.pptx)    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+set mime_type(.rar)     "application/x-rar-compressed"
+set mime_type(.rtf)     "application/rtf"
+set mime_type(.sh)      "application/x-sh"
+set mime_type(.svg)     "image/svg+xml"
+set mime_type(.swf)     "application/x-shockwave-flash"
+set mime_type(.tar)     "application/x-tar"
+set mime_type(.tif)     "image/tiff"
+set mime_type(.tiff)    "image/tiff"
+set mime_type(.ts)      "application/typescript"
+set mime_type(.ttf)     "font/ttf"
+set mime_type(.txt)     "text/plain"
+set mime_type(.vsd)     "application/vnd.visio"
+set mime_type(.wav)     "audio/wav"
+set mime_type(.weba)    "audio/webm"
+set mime_type(.webm)    "video/webm"
+set mime_type(.webp)    "image/webp"
+set mime_type(.woff)    "font/woff"
+set mime_type(.woff2)   "font/woff2"
+set mime_type(.xhtml)   "application/xhtml+xml"
+set mime_type(.xls)     "application/vnd.ms-excel"
+set mime_type(.xlsx)    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+set mime_type(.xml)     "application/xml"
+set mime_type(.xul)     "application/vnd.mozilla.xul+xml"
+set mime_type(.zip)     "application/zip"
+set mime_type(.3gp)     "video/3gpp"
+set mime_type(.3g2)     "video/3gpp2"
+set mime_type(.7z)      "application/x-7z-compressed"
+
+
+###########################################################################
+# BOOTSTRAP
+
+main $argv
+
+# vim:ts=4:sts=4:et:ai
