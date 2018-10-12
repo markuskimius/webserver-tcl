@@ -187,7 +187,7 @@ proc send_file { request file } {
 
     # URL to directory loads index.html
     if { [file isdirectory $fullpath] } {
-        set fullpath [file join $opts(basepath) $pages(200)]
+        set fullpath [file join $fullpath $pages(200)]
     }
 
     # Load the file - if we can
@@ -401,6 +401,7 @@ set mime_type(.js)      "application/javascript"
 set mime_type(.json)    "application/json"
 set mime_type(.mid)     "audio/x-midi"
 set mime_type(.midi)    "audio/x-midi"
+set mime_type(.mjs)     "application/javascript"
 set mime_type(.mpeg)    "video/mpeg"
 set mime_type(.mpkg)    "application/vnd.apple.installer+xml"
 set mime_type(.odp)     "application/vnd.oasis.opendocument.presentation"
