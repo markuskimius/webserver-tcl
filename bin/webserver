@@ -185,9 +185,18 @@ proc send_file { request file } {
     set fullpath [file join $opts(basepath) [safe_path $file]]
     set contentType "text/plain"
 
-    # URL to directory loads index.html
+    # URL to directory
     if { [file isdirectory $fullpath] } {
-        set fullpath [file join $fullpath $pages(200)]
+        # If the URL ends in /, send index.html
+        if { [string match "*/" $file] } {
+            set fullpath [file join $fullpath $pages(200)]
+
+        # Otherwise redirect to the URL with the / suffix so the relative paths
+        # referenced by the index.html resolve correctly.
+        } else {
+            send_data req --status=301 --header [list "Location" "$req(url)/"] "301 Moved Permanently"
+            return
+        }
     }
 
     # Load the file - if we can
