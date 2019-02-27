@@ -216,8 +216,14 @@ proc send_file { request file } {
         set contentType $mime_type($ext)
     }
 
+    # Determine the content-length
+    set contentLength [file size $fullpath]
+
     # Send the data
-    send_data req --header=[list "Content-Type" $contentType] -- $body
+    send_data req --header=[list \
+        "Content-Type" $contentType \
+        "Content-Length" $contentLength \
+    ] -- $body
 }
 
 
