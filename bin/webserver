@@ -62,8 +62,8 @@ proc on_connect { chan addr port } {
     set req(remote|addr) $addr
     set req(remote|port) $port
 
-    # Enable line buffering
-    fconfigure $chan -translation binary -buffering line
+    # Enable binary mode
+    fconfigure $chan -translation binary -encoding binary
 
     # Get the request line
     lassign [string trim [gets $chan]] req(method) req(url) req(http)
@@ -114,6 +114,7 @@ proc on_connect { chan addr port } {
         default { send_response req 405 }
     }
 
+    # Close channel if we're done with it
     close $chan
 }
 
@@ -182,6 +183,7 @@ proc send_file { request file } {
     global pages
     global mime_type
     upvar $request req
+    set chan $req(channel)
     set fullpath [file join $opts(basepath) [safe_path $file]]
     set contentType "text/plain"
 
@@ -199,8 +201,8 @@ proc send_file { request file } {
         }
     }
 
-    # Load the file - if we can
-    if { [catch { set body [slurp_file $fullpath] } errmsg] } {
+    # Open the file - if we can
+    if { [catch { set ifs [open $fullpath rb] } errmsg] } {
         if { $file ne $pages(404) } {
             send_response req 404
         } else {
@@ -219,11 +221,14 @@ proc send_file { request file } {
     # Determine the content-length
     set contentLength [file size $fullpath]
 
-    # Send the data
+    # Send the header
     send_data req --header=[list \
         "Content-Type" $contentType \
         "Content-Length" $contentLength \
-    ] -- $body
+    ]
+
+    # Send the body
+    fcopy $ifs $chan -size $contentLength
 }
 
 
@@ -262,9 +267,13 @@ proc send_data { args } {
         puts $chan "$name: $value\r"
     }
 
-    # Send body
+    # Empty line between header and body
     puts $chan "\r"
-    puts -nonewline $chan $body
+
+    # Send body
+    if { [info exists body] } {
+        puts -nonewline $chan $body
+    }
 }
 
 
@@ -284,16 +293,6 @@ proc safe_path { path } {
     }
 
     return [join $safe "/"]
-}
-
-
-proc slurp_file { file } {
-    set ifs [open $file rb]
-    set data [read $ifs]
-
-    close $ifs
-
-    return $data
 }
 
 
