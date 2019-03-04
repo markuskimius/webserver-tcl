@@ -57,13 +57,20 @@ proc main { argv } {
 
 
 proc on_connect { chan addr port } {
+    # Configure the channel for binary mode
+    fconfigure $chan -translation binary -encoding binary
+
+    # Read the header when they send it
+    fileevent $chan readable [list on_readable $chan $addr $port]
+}
+
+
+proc on_readable { chan addr port } {
     global opts
+    global sess
     set req(channel) $chan
     set req(remote|addr) $addr
     set req(remote|port) $port
-
-    # Enable binary mode
-    fconfigure $chan -translation binary -encoding binary
 
     # Get the request line
     lassign [string trim [gets $chan]] req(method) req(url) req(http)
@@ -115,7 +122,9 @@ proc on_connect { chan addr port } {
     }
 
     # Close channel if we're done with it
-    close $chan
+    if { ! [info exists sess($chan|keep_open)] } {
+        close $chan
+    }
 }
 
 
@@ -180,6 +189,7 @@ proc send_response { request status } {
 
 proc send_file { request file } {
     global opts
+    global sess
     global pages
     global mime_type
     upvar $request req
@@ -228,7 +238,18 @@ proc send_file { request file } {
     ]
 
     # Send the body
-    fcopy $ifs $chan -size $contentLength
+    set sess($chan|keep_open) 1
+    fcopy $ifs $chan -size $contentLength -command [list on_file_sent $ifs $chan]
+}
+
+
+proc on_file_sent { ifs chan size { errmsg "" } } {
+    global sess
+
+    # Clean up
+    unset sess($chan|keep_open)
+    close $ifs
+    close $chan
 }
 
 
