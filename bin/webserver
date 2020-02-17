@@ -1,10 +1,10 @@
-#!/bin/sh
+#!/bin/bash
+#\
+export TCLLIBPATH="$(dirname $0)/../lib/getopt-tcl${TCLLIBPATH+:}${TCLLIBPATH}"
 #\
 exec tclsh "$0" "$@"
 
-# Change this path to where you have getopt-tcl installed
-lappend auto_path "[file dirname [file normalize [info script]]]/../lib/getopt-tcl"
-
+lappend auto_path {*}[split $env(TCLLIBPATH) ":"]
 package require getopt
 
 
