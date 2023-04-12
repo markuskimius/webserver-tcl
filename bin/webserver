@@ -90,6 +90,7 @@ proc on_readable { chan addr port } {
 
     # Parse the URL
     lassign [split $req(url) "?"] req(path) req(query)
+    set req(path) [url_decode $req(path)]
     foreach param [split $req(query) "&"] {
         lassign [split $param "="] name value
 
