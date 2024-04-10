@@ -268,6 +268,12 @@ proc send_file { request file } {
 
 proc get_range { request contentLength } {
     upvar $request req
+    set int_t integer
+
+    # Tcl 8.5+ supports wideinteger
+    if { $::tcl_version >= 8.5 } {
+        set int_t wideinteger
+    }
 
     # If no range header, return no range
     if { ! [info exists req(header|range)] } return
@@ -291,8 +297,8 @@ proc get_range { request contentLength } {
     lassign $range start end
     if { ! [string length $end] } { set end [expr $contentLength - 1] }
     if { ! [string length $start] } { set start [expr $contentLength - $end] }
-    if { ! [string is integer $start] } return
-    if { ! [string is integer $end] } return
+    if { ! [string is $int_t $start] } return
+    if { ! [string is $int_t $end] } return
 
     # Return the two parts
     return [list $start $end]
