@@ -13,6 +13,7 @@ $ webserver-tcl/bin/webserver
 ## Options
 
 * `--port <num>` Run on this port. Default is 5000.
+* `--server <addr>` Listen on this address. Default is 0.0.0.0.
 * `--basepath <path>` Serve pages from this path. Default is `$HOME/public_html`.
 
 ## License

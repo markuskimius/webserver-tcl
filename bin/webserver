@@ -13,6 +13,7 @@ package require getopt
 
 set opts(debug)     0
 set opts(port)      5000
+set opts(server)    "0.0.0.0"
 set opts(basepath)  "$env(HOME)/public_html"
 
 set pages(200)  "index.html"
@@ -28,12 +29,13 @@ proc main { argv } {
     set errcount 0
 
     while { 1 } {
-        set c [getopt $argv "debug 0 port is_port basepath is_dir"]
+        set c [getopt $argv "debug 0 port is_port server 1 basepath is_dir"]
         if { $c == -1 } break
 
         switch -exact -- $c {
             debug    { set opts(debug) 1          }
             port     { set opts(port) $optarg     }
+            server   { set opts(server) $optarg   }
             basepath { set opts(basepath) $optarg }
 
             - {
@@ -50,8 +52,8 @@ proc main { argv } {
         exit 1
     }
 
-    socket -server on_connect $opts(port)
-    puts "Listening on $opts(port)..."
+    socket -server on_connect -myaddr $opts(server) $opts(port)
+    puts "Listening on $opts(server):$opts(port)..."
     vwait forever
 }
 
