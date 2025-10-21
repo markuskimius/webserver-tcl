@@ -60,7 +60,7 @@ proc main { argv } {
 
 proc on_connect { chan addr port } {
     # Configure the channel for binary mode
-    fconfigure $chan -translation binary -encoding binary
+    fconfigure $chan -translation binary -encoding "iso8859-1"
 
     # Read the header when they send it
     fileevent $chan readable [list on_readable $chan $addr $port]
@@ -146,8 +146,12 @@ proc on_get_request { request } {
 proc on_post_request { request } {
     upvar $request req
     set chan $req(channel)
-    set length $req(header|content-length)
-    set contentType $req(header|content-type)
+    set length 0
+    set contentType "text/plain"
+
+    # Read the request headers
+    if { [info exists req(header|content-length)] } { set length $req(header|content-length) }
+    if { [info exists req(header|content-type)] } { set contentType $req(header|content-type) }
 
     # Read the request body
     set rxbody [read $chan $length]
@@ -188,7 +192,7 @@ proc send_response { request status } {
         send_file req $file
     } else {
         set text $::status_code($status)
-        send_data req --status=$status -- "$status $text"
+        send_data req --status=$status -- "$status $text\n"
     }
 }
 
@@ -214,7 +218,7 @@ proc send_file { request file } {
         # Otherwise redirect to the URL with the / suffix so the relative paths
         # referenced by the index.html resolve correctly.
         } else {
-            send_data req --status=301 --header [list "Location" "$req(url)/"] "301 Moved Permanently"
+            send_data req --status=301 --header [list "Location" "$req(url)/"] "301 Moved Permanently\n"
             return
         }
     }
@@ -224,7 +228,7 @@ proc send_file { request file } {
         if { $file ne $pages(404) } {
             send_response req 404
         } else {
-            send_data req --status=404 "404 Not Found"
+            send_data req --status=404 "404 Not Found\n"
         }
 
         return
@@ -282,7 +286,7 @@ proc get_range { request contentLength } {
 
     # Validate the range is in "bytes=<range>" format
     lassign [split $req(header|range) "="] bytes range
-    if { $bytes != "bytes" } return
+    if { $bytes ne "bytes" } return
 
     # We don't support multipart ranges
     set ranges [split $range ","]
