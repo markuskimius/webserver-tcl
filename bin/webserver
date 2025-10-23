@@ -6,6 +6,8 @@ exec tclsh "$0" "$@"
 
 lappend auto_path {*}[split $env(TCLLIBPATH) ":"]
 package require getopt
+package require json
+package require json::write
 
 
 ###########################################################################
@@ -16,6 +18,13 @@ set opts(port)      5000
 set opts(server)    "0.0.0.0"
 set opts(basepath)  "$env(HOME)/public_html"
 
+set api(enabled)    0
+set api(path)       "/api"
+set api(store)      "$opts(basepath)/apidata.json"
+set api(maxcount)   4096
+set api(maxlength)  4096
+set api(auth)       ""
+
 set pages(200)  "index.html"
 set pages(403)  "forbidden.html"
 set pages(404)  "missing.html"
@@ -25,18 +34,23 @@ set pages(404)  "missing.html"
 # PROGRAM BEGINS HERE
 
 proc main { argv } {
+    global api
     global opts
     set errcount 0
 
     while { 1 } {
-        set c [getopt $argv "debug 0 port is_port server 1 basepath is_dir"]
+        set c [getopt $argv "debug 0 port is_port server 1 basepath is_dir api-enable 0 api-auth 1 api-path 1 api-store 1"]
         if { $c == -1 } break
 
         switch -exact -- $c {
-            debug    { set opts(debug) 1          }
-            port     { set opts(port) $optarg     }
-            server   { set opts(server) $optarg   }
-            basepath { set opts(basepath) $optarg }
+            debug       { set opts(debug) 1             }
+            port        { set opts(port) $optarg        }
+            server      { set opts(server) $optarg      }
+            basepath    { set opts(basepath) $optarg    }
+            api-enable  { set api(enabled) 1            }
+            api-auth    { set api(auth) $optarg         }
+            api-path    { set api(path) $optarg         }
+            api-store   { set api(store) $optarg        }
 
             - {
                 puts stderr "invalid argument -- $optarg"
@@ -52,8 +66,17 @@ proc main { argv } {
         exit 1
     }
 
+    # Initialize
+    api_load
+
+    # Listen
     socket -server on_connect -myaddr $opts(server) $opts(port)
     puts "Listening on $opts(server):$opts(port)..."
+
+    if { $api(enabled) } {
+        puts "API endpoint at $api(path)"
+    }
+
     vwait forever
 }
 
@@ -123,6 +146,8 @@ proc on_readable { chan addr port } {
     # Call the method handler
     switch -exact -- $req(method) {
         GET     { on_get_request req    }
+        PUT     { on_put_request req    }
+        DELETE  { on_delete_request req }
         POST    { on_post_request req   }
         default { send_response req 405 }
     }
@@ -135,11 +160,152 @@ proc on_readable { chan addr port } {
 
 
 proc on_get_request { request } {
+    global api
     upvar $request req
     set chan $req(channel)
     set path $req(path)
 
+    # Handle API path
+    if { $api(enabled) && [api_ispath $path] } {
+        set name [api_pathname $path]
+
+        # Get all data
+        if { $name eq "" } {
+            set data "{}\n"
+
+            if { [file readable $api(store)] } {
+                catch {
+                    set fd [open $api(store) r]
+                    set data [read $fd]
+                    close $fd
+                } err
+
+                if { [string length $err] } {
+                    puts stderr $err
+                    send_response req 500
+                }
+            }
+
+            send_data req --status=200 --header [list "Content-Type" "application/json"] -- $data
+        # Get a specific item
+        } elseif { [info exists api(data|$name)] } {
+            set data $api(data|$name)
+            set contentType "text/plain"
+
+            if { [info exists req(header|content-type)] } {
+                set contentType $req(header|content-type)
+            }
+
+            # Send data with the same contentType as the one we received
+            send_data req --status=200 --header [list "Content-Type" $contentType] -- $data
+        # Item not found
+        } else {
+            send_data req --status=404 --header [list "Content-Type" "text/plain"] -- "No such path\n"
+        }
+
+        return
+    }
+
     send_file req $path
+}
+
+
+proc on_put_request { request } {
+    global api
+    upvar $request req
+    set chan $req(channel)
+    set path $req(path)
+
+    if { $api(enabled) } {
+        set name [api_pathname $path]
+        set auth ""
+        set length 0
+        set contentType "text/plain"
+
+        # Read the request headers
+        if { [info exists req(header|authorization)] } { set auth [lindex $req(header|authorization) 1] }
+        if { [info exists req(header|content-length)] } { set length $req(header|content-length) }
+        if { [info exists req(header|content-type)] } { set contentType $req(header|content-type) }
+
+        # Validate
+        if { $auth ne $api(auth) } {
+            send_data req --status=403 --header [list "Content-Type" "text/plain"] -- "Invalid authorization\n"
+            return
+        }
+
+        if { $name eq "" || [string length $name] > $api(maxlength) } {
+            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Invalid path\n"
+            return
+        }
+
+        if { [llength [array names api "data|*"]] >= $api(maxcount) && ! [info exists api(data|$name)] } {
+            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Record limit exceeded\n"
+            return
+        }
+
+        if { $length > $api(maxlength) } {
+            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Length limit exceeded\n"
+            return
+        }
+
+        # Read the request body
+        set rxbody [read $chan $length]
+
+        # Put the value
+        set api(data|$name) $rxbody
+
+        if { ! [api_save] } {
+            send_data req --status=503 --header [list "Content-Type" "text/plain"] -- "Unable to persist PUT\n"
+            return
+        }
+
+        send_data req --status=200 --header [list "content-Type" "text/plain"] -- "Ok\n"
+        return
+    }
+
+    send_response req 405
+}
+
+
+proc on_delete_request { request } {
+    global api
+    upvar $request req
+    set chan $req(channel)
+    set path $req(path)
+
+    if { $api(enabled) } {
+        set name [api_pathname $path]
+        set auth ""
+
+        # Read the request headers
+        if { [info exists req(header|authorization)] } { set auth [lindex $req(header|authorization) 1] }
+
+        # Validate
+        if { $auth ne $api(auth) } {
+            send_data req --status=403 --header [list "Content-Type" "text/plain"] -- "Invalid authorization\n"
+            return
+        }
+
+        if { $name eq "" || [string length $name] > $api(maxlength) } {
+            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Invalid path\n"
+            return
+        }
+
+        # Delete the value
+        if { [info exists api(data|$name)] } {
+            unset api(data|$name)
+
+            if { ! [api_save] } {
+                send_data req --status=503 --header [list "Content-Type" "text/plain"] -- "Unable to persist DELETE\n"
+                return
+            }
+        }
+
+        send_data req --status=200 --header [list "content-Type" "text/plain"] -- "Ok\n"
+        return
+    }
+
+    send_response req 405
 }
 
 
@@ -382,6 +548,86 @@ proc safe_path { path } {
     }
 
     return [join $safe "/"]
+}
+
+
+proc api_load { } {
+    global api
+
+    if { [file exists $api(store)] } {
+        catch {
+            set fd [open $api(store) rb]
+            set bytes [read $fd]
+            set jsondict [json::json2dict $bytes]
+
+            foreach { name value } $jsondict {
+                set api(data|$name) $value
+            }
+
+            close $fd
+        } err
+
+        if { [string length $err] } {
+            puts stderr $err
+            return 0
+        }
+    }
+
+    return 1
+}
+
+
+proc api_save { } {
+    global api
+    set tmpfile "$api(store).tmp"
+    set jsondict ""
+
+    # Prepare json
+    foreach { key value } [array get api "data|*"] {
+        set name [string range $key 5 end]
+
+        dict append jsondict $name [json::write string $value]
+    }
+
+    # Write json
+    catch {
+        set fd [open $tmpfile wb]
+        puts $fd [json::write object {*}$jsondict]
+        close $fd
+
+        file rename -force $tmpfile $api(store)
+    } err
+
+    if { [string length $err] } {
+        puts stderr $err
+        return 0
+    }
+
+    return 1
+}
+
+
+proc api_ispath { path } {
+    global api
+
+    if { [string match "$api(path)/*" "$path"] || $api(path) eq $path } {
+        return 1
+    }
+
+    return 0
+}
+
+
+proc api_pathname { path } {
+    global api
+
+    if { [api_ispath $path] } {
+        set len [string length "$api(path)/"]
+
+        return [string range $path $len end]
+    }
+
+    return ""
 }
 
 
