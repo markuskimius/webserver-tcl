@@ -21,8 +21,9 @@ set opts(basepath)  "$env(HOME)/public_html"
 set api(enabled)    0
 set api(path)       "/api"
 set api(store)      "$opts(basepath)/apidata.json"
-set api(maxcount)   4096
-set api(maxlength)  4096
+set api(maxpath)    256
+set api(maxlength)  65536
+set api(maxcount)   1024
 set api(auth)       ""
 
 set pages(200)  "index.html"
@@ -122,6 +123,9 @@ proc on_readable { chan addr port } {
         set req(query|$name) [url_decode $value]
     }
 
+    # Normalize path
+    set req(path) "[file normalize "//$req(path)"][expr [string match "*/" $req(path)] ? \"/\" : \"\"]"
+
     # Get the remaining header
     while { 1 } {
         set line [split [string trim [gets $chan]] ":"]
@@ -169,22 +173,9 @@ proc on_get_request { request } {
     if { $api(enabled) && [api_ispath $path] } {
         set name [api_pathname $path]
 
-        # Get all data
-        if { $name eq "" } {
-            set data "{}\n"
-
-            if { [file readable $api(store)] } {
-                catch {
-                    set fd [open $api(store) r]
-                    set data [read $fd]
-                    close $fd
-                } err
-
-                if { [string length $err] } {
-                    puts stderr $err
-                    send_response req 500
-                }
-            }
+        # Get all items under a path
+        if { $name eq "" || [string match "*/" $name] } {
+            set data [api_getjson $name]
 
             send_data req --status=200 --header [list "Content-Type" "application/json"] -- $data
         # Get a specific item
@@ -233,7 +224,7 @@ proc on_put_request { request } {
             return
         }
 
-        if { $name eq "" || [string length $name] > $api(maxlength) } {
+        if { $name eq "" || [string length $name] > $api(maxpath) } {
             send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Invalid path\n"
             return
         }
@@ -604,6 +595,22 @@ proc api_save { } {
     }
 
     return 1
+}
+
+
+proc api_getjson { prefix } {
+    global api
+    set jsondict ""
+    set length [string length "data|$prefix"]
+
+    # Prepare json
+    foreach { key value } [array get api "data|$prefix*"] {
+        set name [string range $key $length end]
+
+        dict append jsondict $name [json::write string $value]
+    }
+
+    return [json::write object {*}$jsondict]
 }
 
 
