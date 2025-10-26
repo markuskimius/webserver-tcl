@@ -84,7 +84,7 @@ proc main { argv } {
 
 proc on_connect { chan addr port } {
     # Configure the channel for binary mode
-    fconfigure $chan -translation binary -encoding "iso8859-1"
+    fconfigure $chan -translation binary
 
     # Read the header when they send it
     fileevent $chan readable [list on_readable $chan $addr $port]
