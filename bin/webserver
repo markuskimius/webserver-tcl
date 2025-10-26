@@ -123,9 +123,6 @@ proc on_readable { chan addr port } {
         set req(query|$name) [url_decode $value]
     }
 
-    # Normalize path
-    set req(path) "[file normalize "//$req(path)"][expr [string match "*/" $req(path)] ? \"/\" : \"\"]"
-
     # Get the remaining header
     while { 1 } {
         set line [split [string trim [gets $chan]] ":"]
