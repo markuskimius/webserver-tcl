@@ -567,7 +567,6 @@ proc api_load { } {
 
 proc api_save { } {
     global api
-    set tmpfile "$api(store).tmp"
     set jsondict ""
 
     # Prepare json
@@ -579,7 +578,8 @@ proc api_save { } {
 
     # Write json
     catch {
-        set fd [open $tmpfile wb]
+        set tmpfile ""
+        set fd [file tempfile tmpfile $api(store)]
         puts $fd [json::write object {*}$jsondict]
         close $fd
 
