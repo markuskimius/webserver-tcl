@@ -22,7 +22,7 @@ set api(enabled)    0
 set api(path)       "/api"
 set api(auth)       ""
 set api(store)      "$opts(basepath)/apidata.json"
-set api(rotate)     10
+set api(rotate)     0
 set api(limit)      [expr 4 * 1024 * 1024]
 set api(usage)      0
 
@@ -40,7 +40,7 @@ proc main { argv } {
     set errcount 0
 
     while { 1 } {
-        set c [getopt $argv "debug 0 port is_port server 1 basepath is_dir api-enable 0 api-auth 1 api-path 1 api-store 1"]
+        set c [getopt $argv "debug 0 port is_port server 1 basepath is_dir api-enable 0 api-auth 1 api-path 1 api-store 1 api-rotate is_whole"]
         if { $c == -1 } break
 
         switch -exact -- $c {
@@ -52,6 +52,7 @@ proc main { argv } {
             api-auth    { set api(auth) $optarg         }
             api-path    { set api(path) $optarg         }
             api-store   { set api(store) $optarg        }
+            api-rotate  { set api(rotate) $optarg       }
 
             - {
                 puts stderr "invalid argument -- $optarg"
@@ -723,6 +724,11 @@ proc url_decode { str } {
 
 ###########################################################################
 # VALIDATION FUNCTIONS
+
+proc is_whole { val } {
+    return [string is integer $val]
+}
+
 
 proc is_port { val } {
     return [expr [string is integer $val] && $val > 0 && $val <= 65535]
