@@ -22,6 +22,7 @@ set api(enabled)    0
 set api(path)       "/api"
 set api(auth)       ""
 set api(store)      "$opts(basepath)/apidata.json"
+set api(rotate)     10
 set api(limit)      [expr 4 * 1024 * 1024]
 set api(usage)      0
 
@@ -593,6 +594,27 @@ proc api_load { } {
 }
 
 
+proc api_rotate { from i } {
+    global api
+    set to "$api(store).$i"
+
+    if { $i < $api(rotate)-1 && [file exists $to] } {
+        api_rotate $to [expr $i + 1]
+    }
+
+    #
+    # Rotate by moving since moving is faster than copying, except the first
+    # file is copied so that it can be replaced atomically.
+    #
+
+    if { $i == 1 } {
+        file copy -force $from $to
+    } else {
+        file rename -force $from $to
+    }
+}
+
+
 proc api_save { } {
     global api
     set jsondict ""
@@ -610,6 +632,10 @@ proc api_save { } {
         set fd [file tempfile tmpfile $api(store)]
         puts $fd [json::write object {*}$jsondict]
         close $fd
+
+        if { $api(rotate) && [file exists $api(store)] } {
+            api_rotate $api(store) 1
+        }
 
         file rename -force $tmpfile $api(store)
     } err
