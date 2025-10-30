@@ -20,11 +20,10 @@ set opts(basepath)  "$env(HOME)/public_html"
 
 set api(enabled)    0
 set api(path)       "/api"
-set api(store)      "$opts(basepath)/apidata.json"
-set api(maxpath)    256
-set api(maxlength)  65536
-set api(maxcount)   1024
 set api(auth)       ""
+set api(store)      "$opts(basepath)/apidata.json"
+set api(limit)      [expr 4 * 1024 * 1024]
+set api(usage)      0
 
 set pages(200)  "index.html"
 set pages(403)  "forbidden.html"
@@ -221,18 +220,13 @@ proc on_put_request { request } {
             return
         }
 
-        if { $name eq "" || [string length $name] > $api(maxpath) } {
+        if { $name eq "" } {
             send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Invalid path\n"
             return
         }
 
-        if { [llength [array names api "data|*"]] >= $api(maxcount) && ! [info exists api(data|$name)] } {
-            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Record limit exceeded\n"
-            return
-        }
-
-        if { $length > $api(maxlength) } {
-            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Length limit exceeded\n"
+        if { $api(usage) - [api_usageof $name] + [string length "$name|\0"] + $length > $api(limit) } {
+            send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Limit exceeded\n"
             return
         }
 
@@ -240,7 +234,7 @@ proc on_put_request { request } {
         set rxbody [read $chan $length]
 
         # Put the value
-        set api(data|$name) $rxbody
+        api_put $name $rxbody
 
         if { ! [api_save] } {
             send_data req --status=503 --header [list "Content-Type" "text/plain"] -- "Unable to persist PUT\n"
@@ -274,14 +268,14 @@ proc on_delete_request { request } {
             return
         }
 
-        if { $name eq "" || [string length $name] > $api(maxlength) } {
+        if { $name eq "" } {
             send_data req --status=409 --header [list "Content-Type" "text/plain"] -- "Invalid path\n"
             return
         }
 
         # Delete the value
         if { [info exists api(data|$name)] } {
-            unset api(data|$name)
+            api_delete $name
 
             if { ! [api_save] } {
                 send_data req --status=503 --header [list "Content-Type" "text/plain"] -- "Unable to persist DELETE\n"
@@ -539,6 +533,40 @@ proc safe_path { path } {
 }
 
 
+proc api_put { name value } {
+    global api
+
+    if { [info exists api(data|$name)] } {
+        incr api(usage) -[string length "$name|$api(data|$name)\0"]
+    }
+
+    incr api(usage) [string length "$name|$value\0"]
+    set api(data|$name) $value
+}
+
+
+proc api_delete { name } {
+    global api
+
+    if { [info exists api(data|$name)] } {
+        incr api(usage) -[string length "$name|$api(data|$name)\0"]
+        unset api(data|$name)
+    }
+}
+
+
+proc api_usageof { name } {
+    global api
+    set usage 0
+
+    if { [info exists api(data|$name)] } {
+        set usage [string length "$name|$api(data|$name)\0"]
+    }
+
+    return $usage
+}
+
+
 proc api_load { } {
     global api
 
@@ -549,7 +577,7 @@ proc api_load { } {
             set jsondict [json::json2dict $bytes]
 
             foreach { name value } $jsondict {
-                set api(data|$name) $value
+                api_put $name $value
             }
 
             close $fd
