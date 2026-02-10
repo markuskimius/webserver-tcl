@@ -9,6 +9,26 @@ package require getopt
 package require json
 package require json::write
 
+proc usage { } {
+    puts [string trimleft "
+A skeleton program.
+
+Usage: ${::SCRIPTNAME} \[OPTIONS\]
+
+Options:
+  --debug               Enable debugging mode.
+  --port PORT           Listen on PORT (default=${::opts(port)})
+  --server HOSTNAME     Listen on HOSTNAME (default=${::opts(server)}).
+  --basepath DIRPATH    Serve files from DIRPATH (default=${::opts(basepath)}).
+
+  --api-enable          Enable API.
+  --api-auth AUTH       API requires authentication using AUTH.
+  --api-path URLPATH    API end point prefix is URLPATH (default=${::api(path)}).
+  --api-store FILEPATH  Serve API data from FILEPATH (default=${::api(store)}).
+  --api-rotate NUM      Keep API data NUM versions (default=${::api(rotate)}).
+"]
+}
+
 
 ###########################################################################
 # DEFAULTS
@@ -34,16 +54,20 @@ set pages(404)  "missing.html"
 ###########################################################################
 # PROGRAM BEGINS HERE
 
+set SCRIPTNAME     [file tail $argv0]
+
 proc main { argv } {
     global api
     global opts
     set errcount 0
 
     while { 1 } {
-        set c [getopt $argv "debug 0 port is_port server 1 basepath is_dir api-enable 0 api-auth 1 api-path 1 api-store 1 api-rotate is_whole"]
+        set c [getopt $argv "h 0 help 0 debug 0 port is_port server 1 basepath is_dir api-enable 0 api-auth 1 api-path 1 api-store 1 api-rotate is_whole"]
         if { $c == -1 } break
 
         switch -exact -- $c {
+            h           -
+            help        { usage ; exit 0                }
             debug       { set opts(debug) 1             }
             port        { set opts(port) $optarg        }
             server      { set opts(server) $optarg      }
